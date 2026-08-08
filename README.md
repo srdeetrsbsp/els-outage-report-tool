@@ -1,0 +1,1 @@
+# els-outage-report-tool

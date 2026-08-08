@@ -3,7 +3,11 @@ import pandas as pd
 import numpy as np
 import re
 import io
-import weasyprint
+
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 st.set_page_config(page_title="ELS Bilaspur - Outage & Reconciliation System", layout="wide")
 
@@ -11,7 +15,7 @@ st.title("SOUTH EAST CENTRAL RAILWAY")
 st.subheader("ELECTRIC LOCO SHED, BILASPUR (ELS/BSP)")
 st.markdown("---")
 
-# Layout: Column 1 - Inputs | Column 2 - File Uploads & Actions
+# Layout: Column 1 - Inputs | Column 2 - File Uploads
 col1, col2 = st.columns([1, 1])
 
 with col1:
@@ -31,27 +35,96 @@ def parse_locos(text):
         return []
     return re.findall(r'\d+', str(text))
 
+def generate_pdf_report(holding_count, target_outage, actual_yielded, deficit, total_loss, maint_count, out_count, dead_count):
+    pdf_buffer = io.BytesIO()
+    doc = SimpleDocTemplate(pdf_buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    story = []
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle(
+        'TitleStyle',
+        parent=styles['Heading1'],
+        fontSize=14,
+        textColor=colors.HexColor('#1a365d'),
+        spaceAfter=2
+    )
+    sub_style = ParagraphStyle(
+        'SubStyle',
+        parent=styles['Normal'],
+        fontSize=10,
+        textColor=colors.HexColor('#2b6cb0'),
+        fontName='Helvetica-Bold',
+        spaceAfter=10
+    )
+
+    story.append(Paragraph("SOUTH EAST CENTRAL RAILWAY", title_style))
+    story.append(Paragraph("ELECTRIC LOCO SHED, BILASPUR (ELS/BSP)", sub_style))
+    story.append(Paragraph("<b>Daily Outage Performance & Loss Reconciliation Statement</b>", styles['Normal']))
+    story.append(Spacer(1, 12))
+
+    # KPI Summary Table
+    kpi_data = [
+        ["Fleet Holding", "Target Outage", "Actual Yielded", "Deficit", "Total Loss"],
+        [str(holding_count), f"{target_outage:.2f}", f"{actual_yielded:.2f}", f"{deficit:.2f}", f"{total_loss:.2f}"]
+    ]
+    kpi_table = Table(kpi_data, colWidths=[100, 100, 100, 100, 100])
+    kpi_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#2b6cb0')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0,0), (-1,0), 6),
+        ('BACKGROUND', (0,1), (-1,1), colors.HexColor('#f7fafc')),
+        ('GRID', (0,0), (-1,-1), 1, colors.HexColor('#cbd5e0')),
+    ]))
+    story.append(kpi_table)
+    story.append(Spacer(1, 15))
+
+    # Loss Table
+    story.append(Paragraph("<b>1. Outage Loss Reconciliation Summary</b>", sub_style))
+    story.append(Spacer(1, 6))
+
+    summary_data = [
+        ["S.N.", "Loss Category", "Loco Count", "Outage Loss (Days)"],
+        ["1", "In-Shed Maintenance (ELS BSP & Outstations)", str(maint_count), "24.58"],
+        ["2", "Yesterday's Shed OUT (Post-Release Line Loss)", str(out_count), "5.18"],
+        ["3", "Line Detention & Intermediate Stabling", "34", "3.73"],
+        ["4", "Dead / Failed On Line", str(dead_count), "0.67"],
+        ["Total", "Total Outage Loss Reconciled", "-", f"{total_loss:.2f}"]
+    ]
+    summary_table = Table(summary_data, colWidths=[30, 270, 80, 120])
+    summary_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#2b6cb0')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#e2e8f0')),
+        ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor('#edf2f7')),
+        ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
+    ]))
+    story.append(summary_table)
+
+    doc.build(story)
+    return pdf_buffer.getvalue()
+
 if st.button("Generate Reports (Excel & PDF)", type="primary", use_container_width=True):
     if not raw_excel_file or not fois_csv_file:
         st.error("Please upload both the Raw Data Excel file and the FOIS CSV file.")
     else:
-        # Step A: Parse Raw Excel Sheet 1
+        # Read uploaded Sheet 1
         df_sheet1 = pd.read_excel(raw_excel_file, sheet_name=0)
         
-        # Parse Manual Inputs
         in_shed_list = parse_locos(in_shed_text)
         out_shed_list = parse_locos(out_shed_text)
         maint_list = parse_locos(maint_text)
         dead_list = parse_locos(dead_text)
 
-        # Clean Sheet 1 data to generate Sheet 2 (BSP Locos)
+        # Generate Sheet 2
         df_clean = df_sheet1.copy()
         if len(df_clean) > 2:
             headers = df_clean.iloc[1].values
             df_body = df_clean.iloc[2:].copy()
             df_body.columns = headers
             
-            # Find BSP shed locos for Sheet 2
             if 'Shed' in df_body.columns:
                 df_sheet2 = df_body[df_body['Shed'].astype(str).str.contains('BSP', na=False)].copy()
             else:
@@ -59,7 +132,7 @@ if st.button("Generate Reports (Excel & PDF)", type="primary", use_container_wid
         else:
             df_sheet2 = df_clean.copy()
 
-        # Generate Sheet 3 Summary Columns
+        # Extract Sheet 2 Locos for Sheet 3
         locos_in_sheet2 = []
         if 'Loco' in df_sheet2.columns:
             locos_in_sheet2 = df_sheet2['Loco'].dropna().astype(str).str.extract(r'(\d+)')[0].dropna().tolist()
@@ -77,7 +150,7 @@ if st.button("Generate Reports (Excel & PDF)", type="primary", use_container_wid
             'holding': pad_list(locos_in_sheet2, max_len)
         })
 
-        # Step B: Generate Excel in memory
+        # Generate Excel
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
             df_sheet1.to_excel(writer, sheet_name='Sheet1', index=False)
@@ -86,63 +159,18 @@ if st.button("Generate Reports (Excel & PDF)", type="primary", use_container_wid
         
         excel_data = excel_buffer.getvalue()
 
-        # Step C: Reconcile Metrics & Build PDF
+        # Calculations
         holding_count = len([x for x in locos_in_sheet2 if pd.notna(x)]) if locos_in_sheet2 else 251
         target_outage = 225.00
         actual_yielded = 214.82
         deficit = round(actual_yielded - target_outage, 2)
         total_loss = round(holding_count - actual_yielded, 2)
 
-        html_pdf = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-        <style>
-          @page {{ size: A4; margin: 15mm 12mm; }}
-          body {{ font-family: Arial, sans-serif; font-size: 9pt; color: #1a202c; }}
-          .header {{ border-bottom: 2px solid #1a365d; padding-bottom: 5px; }}
-          .title {{ font-size: 14pt; font-weight: bold; color: #1a365d; }}
-          .subtitle {{ font-size: 10pt; font-weight: bold; color: #2b6cb0; }}
-          table {{ width: 100%; border-collapse: collapse; margin-top: 12px; }}
-          th {{ background-color: #2b6cb0; color: white; padding: 6px; font-size: 8pt; text-align: left; }}
-          td {{ border-bottom: 1px solid #e2e8f0; padding: 5px 6px; font-size: 8pt; }}
-          .kpi-box {{ background: #f7fafc; border: 1px solid #cbd5e0; padding: 8px; text-align: center; margin-top: 10px; }}
-        </style>
-        </head>
-        <body>
-          <div class="header">
-            <div class="title">SOUTH EAST CENTRAL RAILWAY</div>
-            <div class="subtitle">ELECTRIC LOCO SHED, BILASPUR (ELS/BSP)</div>
-            <p><b>Daily Outage Performance & Loss Reconciliation Statement</b></p>
-          </div>
-          <div class="kpi-box">
-            <b>Fleet Holding:</b> {holding_count} &nbsp;|&nbsp; 
-            <b>Target Outage:</b> {target_outage:.2f} &nbsp;|&nbsp; 
-            <b>Actual Yielded:</b> {actual_yielded:.2f} &nbsp;|&nbsp; 
-            <span style="color:red;"><b>Deficit:</b> {deficit:.2f}</span>
-          </div>
-          <h4 style="margin-top:15px; color:#1a365d;">1. Outage Reconciliation Summary</h4>
-          <table>
-            <thead>
-              <tr><th>S.N.</th><th>Loss Category</th><th>Loco Count</th><th>Outage Loss (Days)</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>1</td><td>In-Shed Maintenance (ELS BSP & Outstations)</td><td>{len(maint_list)}</td><td>24.58</td></tr>
-              <tr><td>2</td><td>Yesterday's Shed OUT (Post-Release Line Loss)</td><td>{len(out_shed_list)}</td><td>5.18</td></tr>
-              <tr><td>3</td><td>Line Detention & Intermediate Stabling</td><td>34</td><td>3.73</td><td></tr>
-              <tr><td>4</td><td>Dead / Failed On Line</td><td>{len(dead_list)}</td><td>0.67</td></tr>
-              <tr style="font-weight:bold; background:#edf2f7;">
-                <td colspan="3">Total Loss Reconciled</td><td>{total_loss:.2f}</td>
-              </tr>
-            </tbody>
-          </table>
-        </body>
-        </html>
-        """
-        
-        pdf_buffer = io.BytesIO()
-        weasyprint.HTML(string=html_pdf).write_pdf(pdf_buffer)
-        pdf_data = pdf_buffer.getvalue()
+        # Generate PDF using ReportLab
+        pdf_data = generate_pdf_report(
+            holding_count, target_outage, actual_yielded, deficit, total_loss,
+            len(maint_list), len(out_shed_list), len(dead_list)
+        )
 
         st.success("Reports generated successfully!")
         

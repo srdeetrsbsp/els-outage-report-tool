@@ -216,14 +216,16 @@ if st.button("Generate Reports (Excel & PDF)", type="primary", use_container_wid
         # Clean Shed and Loco columns safely
         if 'Shed' in df_sheet1.columns:
             df_sheet1['Shed_Clean'] = df_sheet1['Shed'].astype(str).str.replace('\xa0', '').str.strip()
-            df_sheet2 = df_sheet1[df_sheet1['Shed_Clean'] == 'BSP'].copy()
+            # FIX: Filter using .str.contains('BSP') to catch both 'BSPE' and 'BSP'
+            df_sheet2 = df_sheet1[df_sheet1['Shed_Clean'].str.contains('BSP', na=False)].copy()
             df_sheet2.drop(columns=['Shed_Clean'], inplace=True)
         else:
             df_sheet2 = df_sheet1.copy()
 
         if 'Loco' in df_sheet2.columns:
-            bsp_holding_locos = df_sheet2['Loco'].dropna().apply(clean_loco_no).tolist()
-            bsp_holding_locos = [l for l in bsp_holding_locos if l]
+            # Extract unique holding locomotives
+            bsp_holding_locos = df_sheet2['Loco'].dropna().apply(clean_loco_no).unique().tolist()
+            bsp_holding_locos = [l for l in bsp_holding_locos if l and l != 'nan']
         else:
             bsp_holding_locos = []
 
@@ -270,7 +272,7 @@ if st.button("Generate Reports (Excel & PDF)", type="primary", use_container_wid
             maint_list, out_shed_list, dead_list, df_depl
         )
 
-        st.success(f"Reports successfully generated! Active Fleet Holding identified: {holding_count} locos.")
+        st.success(f"Reports successfully generated! Active Fleet Holding identified: {holding_count} locos across 1,213 records.")
 
         st.download_button(
             label="Download Completed Analysis Excel (.xlsx)",

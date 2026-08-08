@@ -6,7 +6,7 @@ import io
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 st.set_page_config(page_title="ELS Bilaspur - Outage & Reconciliation System", layout="wide")
@@ -71,7 +71,6 @@ def generate_pdf_report(holding_count, target_outage, actual_yielded, deficit, t
         'CellHeader', parent=styles['Normal'], fontSize=8, leading=10, fontName='Helvetica-Bold', textColor=colors.white
     )
 
-    # Header
     story.append(Paragraph("SOUTH EAST CENTRAL RAILWAY", title_style))
     story.append(Paragraph("ELECTRIC LOCO SHED, BILASPUR (ELS/BSP)", sub_style))
     story.append(Paragraph("<b>Daily Outage Performance & Loss Reconciliation Statement</b>", styles['Normal']))
@@ -141,7 +140,6 @@ def generate_pdf_report(holding_count, target_outage, actual_yielded, deficit, t
     annex_headers = [Paragraph("Loco No", cell_header), Paragraph("Type", cell_header), Paragraph("Loss Category", cell_header), Paragraph("Yielded", cell_header), Paragraph("Loss", cell_header), Paragraph("Current Live Position & Status", cell_header)]
     annex_rows = [annex_headers]
 
-    # Build annexure rows dynamically from FOIS export + manual input categories
     for _, row in df_depl_cleaned.head(25).iterrows():
         loco = str(row.get('LOCO_CLEAN', ''))
         loc_type = str(row.get('LOCO TYPE', ''))
@@ -165,7 +163,7 @@ def generate_pdf_report(holding_count, target_outage, actual_yielded, deficit, t
         elif loss_days > 0:
             cat = "Line Detention"
         else:
-            continue  # Skip full outage locos from loss annexure
+            continue
 
         status_text = f"At {sttn} ({event})" if sttn else "On Line Movement"
         
@@ -178,7 +176,6 @@ def generate_pdf_report(holding_count, target_outage, actual_yielded, deficit, t
             Paragraph(status_text, cell_style)
         ])
 
-    # Add FOIS Discrepancy locos explicitly if not present
     annex_rows.append([Paragraph("43332", cell_bold), Paragraph("WAG9HC", cell_style), Paragraph("Mistagged Home Shed", cell_style), Paragraph("0.00", cell_style), Paragraph("1.00", cell_style), Paragraph("Tagged under ASN (ER) in FOIS", cell_style)])
     annex_rows.append([Paragraph("43356", cell_bold), Paragraph("WAG9HC", cell_style), Paragraph("Missing in FOIS Report", cell_style), Paragraph("0.00", cell_style), Paragraph("1.00", cell_style), Paragraph("Omitted from Daily FOIS Export", cell_style)])
 
@@ -198,31 +195,37 @@ if st.button("Generate Reports (Excel & PDF)", type="primary", use_container_wid
     if not raw_excel_file or not fois_csv_file:
         st.error("Please upload both the Raw Data Excel file and the FOIS CSV file.")
     else:
-        # Step A: Parse Raw Sheet 1 properly (skip row 0 title)
-        df_raw_sheet1 = pd.read_excel(raw_excel_file, sheet_name=0)
+        # Dynamic Header Search for Sheet 1
+        df_raw_sheet1 = pd.read_excel(raw_excel_file, sheet_name=0, header=None)
         
-        # Determine header row index
-        header_idx = 1
-        if 'Ownr' in df_raw_sheet1.columns:
-            df_sheet1 = df_raw_sheet1.copy()
-        else:
-            df_sheet1 = pd.read_excel(raw_excel_file, sheet_name=0, header=1)
+        header_row_idx = 0
+        for i, row in df_raw_sheet1.iterrows():
+            row_vals = row.astype(str).str.replace('\xa0', '').str.strip().tolist()
+            if 'Shed' in row_vals or 'Loco' in row_vals or 'Ownr' in row_vals:
+                header_row_idx = i
+                break
 
-        # Parse Manual Input Lists
+        df_sheet1 = pd.read_excel(raw_excel_file, sheet_name=0, header=header_row_idx)
+        df_sheet1.columns = [str(c).replace('\xa0', '').strip() for c in df_sheet1.columns]
+
         in_shed_list = parse_locos(in_shed_text)
         out_shed_list = parse_locos(out_shed_text)
         maint_list = parse_locos(maint_text)
         dead_list = parse_locos(dead_text)
 
-        # Filter Sheet 2: Only SECR BSP holding locos
-        df_sheet1['Shed_Clean'] = df_sheet1['Shed'].astype(str).str.replace('\xa0', '').str.strip()
-        df_sheet2 = df_sheet1[df_sheet1['Shed_Clean'] == 'BSP'].copy()
-        if 'Shed_Clean' in df_sheet2.columns:
+        # Clean Shed and Loco columns safely
+        if 'Shed' in df_sheet1.columns:
+            df_sheet1['Shed_Clean'] = df_sheet1['Shed'].astype(str).str.replace('\xa0', '').str.strip()
+            df_sheet2 = df_sheet1[df_sheet1['Shed_Clean'] == 'BSP'].copy()
             df_sheet2.drop(columns=['Shed_Clean'], inplace=True)
+        else:
+            df_sheet2 = df_sheet1.copy()
 
-        # Extract precise BSP Holding Locos for Sheet 3
-        bsp_holding_locos = df_sheet2['Loco'].dropna().apply(clean_loco_no).tolist()
-        bsp_holding_locos = [l for l in bsp_holding_locos if l]
+        if 'Loco' in df_sheet2.columns:
+            bsp_holding_locos = df_sheet2['Loco'].dropna().apply(clean_loco_no).tolist()
+            bsp_holding_locos = [l for l in bsp_holding_locos if l]
+        else:
+            bsp_holding_locos = []
 
         max_len = max(len(in_shed_list), len(out_shed_list), len(dead_list), len(maint_list), len(bsp_holding_locos), 1)
 
@@ -237,33 +240,31 @@ if st.button("Generate Reports (Excel & PDF)", type="primary", use_container_wid
             'holding': pad_list(bsp_holding_locos, max_len)
         })
 
-        # Generate Multi-Sheet Excel
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-            df_raw_sheet1.to_excel(writer, sheet_name='Sheet1', index=False)
+            df_raw_sheet1.to_excel(writer, sheet_name='Sheet1', index=False, header=False)
             df_sheet2.to_excel(writer, sheet_name='Sheet2', index=False)
             df_sheet3.to_excel(writer, sheet_name='Sheet3', index=False)
         excel_data = excel_buffer.getvalue()
 
-        # Step B: Parse FOIS CSV File
         try:
             df_depl = pd.read_csv(fois_csv_file, skiprows=2)
         except:
             df_depl = pd.read_csv(fois_csv_file)
+
+        df_depl.columns = [str(c).replace('\xa0', '').strip() for c in df_depl.columns]
 
         if 'LOCO NUMB' in df_depl.columns:
             df_depl['LOCO_CLEAN'] = df_depl['LOCO NUMB'].apply(clean_loco_no)
         else:
             df_depl['LOCO_CLEAN'] = ""
 
-        # Correct Calculations
         holding_count = len(bsp_holding_locos) if bsp_holding_locos else 251
         target_outage = 225.00
         actual_yielded = 214.82
         deficit = round(actual_yielded - target_outage, 2)
         total_loss = round(holding_count - actual_yielded, 2)
 
-        # Step C: Generate PDF with Annexures
         pdf_data = generate_pdf_report(
             holding_count, target_outage, actual_yielded, deficit, total_loss,
             maint_list, out_shed_list, dead_list, df_depl
